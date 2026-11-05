@@ -149,7 +149,8 @@ export async function prepareGenesisEntry({
     portable: options.portable ?? false,
     nextKeyHashes: options.nextKeyHashes ?? [],
     watchers: options.watchers ?? [],
-    witness: options.witness ?? {},
+    // As in updates, a witness configuration without witnesses is written as `{}`.
+    witness: options.witness?.witnesses?.length ? options.witness : {},
     deactivated: false,
   };
 

@@ -14,7 +14,16 @@ import type {
   SigningOutput,
   Verifier,
 } from '../src/interfaces.js';
-import { createHash, createHashHex, createSCID, deriveHash, deriveNextKeyHash } from '../src/utils/crypto.js';
+import {
+  createHash,
+  createHashHex,
+  createSCID,
+  deriveHash,
+  deriveNextKeyHash,
+  HASH_CACHE_MAX_BYTES,
+  HASH_CACHE_MAX_ENTRIES,
+  hashCacheStats,
+} from '../src/utils/crypto.js';
 import {
   createMultihash,
   encodeBase58Btc,
@@ -604,5 +613,38 @@ describe('Crypto Helpers', () => {
 
     const signerFn = createDocumentSigner(signer, 'did:key:zTest#zTest');
     await expect(signerFn({ id: 'doc' })).rejects.toThrow('Document signing failure: synthetic failure');
+  });
+});
+
+describe('deriveHash cache bounds', () => {
+  test('stays within its entry and byte limits', async () => {
+    for (let i = 0; i < HASH_CACHE_MAX_ENTRIES + 100; i += 1) {
+      await deriveHash({ versionId: `${i}`, filler: 'x'.repeat(64) });
+    }
+    const stats = hashCacheStats();
+    expect(stats.entries).toBeLessThanOrEqual(HASH_CACHE_MAX_ENTRIES);
+    expect(stats.bytes).toBeLessThanOrEqual(HASH_CACHE_MAX_BYTES);
+  });
+
+  test('hashes an oversized input without retaining it', async () => {
+    const before = hashCacheStats();
+    const input = { blob: 'y'.repeat(HASH_CACHE_MAX_BYTES / 2) };
+    const first = await deriveHash(input);
+    expect(hashCacheStats()).toEqual(before);
+    expect(await deriveHash(input)).toBe(first);
+  });
+
+  test('evicts the least recently used entry first', async () => {
+    const pinned = { versionId: 'pinned', filler: 'p' };
+    await deriveHash(pinned);
+    const pinnedKey = JSON.stringify(pinned);
+    for (let i = 0; i < HASH_CACHE_MAX_ENTRIES * 2; i += 1) {
+      await deriveHash(pinned); // keep it recent
+      await deriveHash({ versionId: `churn-${i}` });
+    }
+    // The pinned entry survived the churn: hashing it again does not grow the cache.
+    const before = hashCacheStats();
+    await deriveHash(JSON.parse(pinnedKey));
+    expect(hashCacheStats()).toEqual(before);
   });
 });

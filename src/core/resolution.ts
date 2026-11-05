@@ -18,6 +18,7 @@ import type {
 } from '../interfaces.js';
 import { buildProblemDetails } from '../resolver-result.js';
 import { deriveHash } from '../utils/crypto.js';
+import { assertDidDocumentState } from '../utils/did-document-state.js';
 import { MAX_FUTURE_SKEW_MS, parseUtcIso8601VersionTime } from '../utils/iso8601-datetime.js';
 import {
   deepClone,
@@ -29,6 +30,7 @@ import {
 import {
   countVerifiedWitnessApprovals,
   fetchWitnessProofs,
+  isWitnessParameterDeclared,
   normalizeWitnessThreshold,
   resolveWitnessParameter,
   validateWitnessParameter,
@@ -339,7 +341,7 @@ const processResolvedLogEntries = async ({
       options.versionNumber === versionNumber || options.versionId === resolverContext.meta.versionId;
     const captureByTime =
       options.versionTime !== undefined &&
-      options.versionTime > new Date(resolverContext.meta.updated) &&
+      options.versionTime >= new Date(resolverContext.meta.updated) &&
       (!nextEntry || options.versionTime < new Date(nextEntry.versionTime));
 
     if (!resolverContext.resolvedSnapshot && (captureByVersion || captureByTime)) {
@@ -420,6 +422,8 @@ const validateAndParseLogEntry = ({
   }
 
   const parsedStateDid = parseDidWebvhIdentifier(requireDidDocumentId(entry.state.id), `version '${version}' state.id`);
+  // A correctly signed entry must still carry a DID document: the state is what resolution returns.
+  assertDidDocumentState(entry.state, requireDidDocumentId(entry.state.id), `version '${version}' state`);
 
   return {
     entry,
@@ -443,7 +447,11 @@ const processGenesisEntry = async ({
   entryContext: ParsedResolutionEntryContext;
   options: InternalResolutionOptions;
 }): Promise<DIDDocument> => {
-  const { entry: sourceEntry, parsedStateDid } = entryContext;
+  const {
+    entry: sourceEntry,
+    parsedVersion: { entryHash },
+    parsedStateDid,
+  } = entryContext;
   const { versionTime, parameters, proof } = sourceEntry;
 
   resolverContext.meta.created = versionTime;
@@ -459,6 +467,9 @@ const processGenesisEntry = async ({
   const resolvedGenesisWitness = resolveWitnessParameter(parameters);
   // Always set witness: normalize null/undefined to {}, and preserve explicit config
   resolverContext.meta.witness = resolvedGenesisWitness ?? {};
+  if (isWitnessParameterDeclared(resolverContext.meta.witness)) {
+    validateWitnessParameter(resolverContext.meta.witness);
+  }
   resolverContext.meta.watchers = parameters.watchers ?? null;
   resolverContext.meta.ttl =
     parameters.ttl !== undefined && parameters.ttl !== null ? String(parameters.ttl) : DEFAULT_TTL_SECONDS;
@@ -485,6 +496,11 @@ const processGenesisEntry = async ({
   const prelimEntry = replaceValueInObject(logEntry, SCID_PLACEHOLDER, resolverContext.meta.scid);
 
   const logEntryHash2 = await deriveHash(prelimEntry);
+  // The proof below is verified over the derived versionId, so the hash the
+  // log claims must be compared explicitly (Entry Hash Generation and Verification).
+  if (!hashChainIsValid(logEntryHash2, entryHash)) {
+    throw new Error(`Hash chain broken at '${resolverContext.meta.versionId}'`);
+  }
   const verified = await documentStateIsValid(
     { ...prelimEntry, versionId: `1-${logEntryHash2}`, proof },
     resolverContext.meta.updateKeys,
@@ -586,7 +602,7 @@ const processSubsequentEntry = async ({
   if (normalizedWitness !== undefined) {
     resolverContext.meta.witness = normalizedWitness;
   }
-  if (resolverContext.meta.witness?.witnesses?.length) {
+  if (isWitnessParameterDeclared(resolverContext.meta.witness)) {
     validateWitnessParameter(resolverContext.meta.witness);
   }
   if (hasOwn(parameters, METHOD_PARAMETER_KEYS.watchers)) {

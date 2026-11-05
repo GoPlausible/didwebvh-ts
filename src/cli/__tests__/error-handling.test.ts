@@ -120,6 +120,24 @@ describe('CLI error handling', () => {
     }
   });
 
+  test('handlers reject a --witness-threshold that is not a whole number', async () => {
+    const witness = `did:key:${(await generateTestVerificationMethod()).publicKeyMultibase}`;
+    for (const threshold of ['1junk', '1.9']) {
+      await expect(
+        handleCreate(['--address', 'example.com', '--witness', witness, '--witness-threshold', threshold])
+      ).rejects.toMatchObject({
+        name: 'CliError',
+        message: expect.stringContaining('Invalid --witness-threshold'),
+      });
+      await expect(
+        handleUpdate(['--log', 'did.jsonl', '--witness', witness, '--witness-threshold', threshold])
+      ).rejects.toMatchObject({
+        name: 'CliError',
+        message: expect.stringContaining('Invalid --witness-threshold'),
+      });
+    }
+  });
+
   test('CLI errors expose their exit code', () => {
     expect(new CliError('invalid command', 2).exitCode).toBe(2);
   });

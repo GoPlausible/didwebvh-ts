@@ -1,6 +1,11 @@
 import type { DIDLog, DIDLogEntry, WitnessParameterResolution, WitnessProofRejection } from '../interfaces.js';
 import { deepClone, parseAndValidateVersionId } from '../utils.js';
-import { hasActiveWitnessRequirement, resolveWitnessParameter, validateWitnessParameter } from '../witness.js';
+import {
+  hasActiveWitnessRequirement,
+  isWitnessParameterDeclared,
+  resolveWitnessParameter,
+  validateWitnessParameter,
+} from '../witness.js';
 
 export interface RequiredWitnessCheck {
   targetVersionId: string;
@@ -80,7 +85,7 @@ export const computeWitnessRequirementChecks = (log: DIDLog): RequiredWitnessChe
     const currentWitness: WitnessParameterResolution =
       index === 0 ? (explicitWitness ?? {}) : explicitWitness !== undefined ? explicitWitness : (previousWitness ?? {});
 
-    if (currentWitness.witnesses?.length) {
+    if (isWitnessParameterDeclared(currentWitness)) {
       validateWitnessParameter(currentWitness);
     }
 

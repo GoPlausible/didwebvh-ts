@@ -3,6 +3,7 @@ import type { DIDLog } from '../src/interfaces.js';
 import { createDID, deactivateDID, resolveDIDFromLog, updateDID } from '../src/method.js';
 import { deriveHash } from '../src/utils/crypto.js';
 import {
+  buildV05Genesis,
   createTestDIDDocument,
   createTestSigner,
   generateTestVerificationMethod,
@@ -145,5 +146,48 @@ describe('didwebvh v1.0 entryHash spec compliance', () => {
   test('log is resolvable end-to-end (hash chain + signatures)', async () => {
     const resolved = await resolveDIDFromLog(log, { verifier });
     expect(resolved.didDocumentMetadata.versionId).toBe(log[log.length - 1].versionId);
+  });
+});
+
+describe('first entry hash verification', () => {
+  const withForeignHash = (log: DIDLog): DIDLog => {
+    const tampered: DIDLog = JSON.parse(JSON.stringify(log));
+    const [version, hash] = tampered[0].versionId.split('-');
+    tampered[0].versionId = `${version}-${hash.slice(0, -5)}zzzzz`;
+    return tampered;
+  };
+
+  test('rejects a first entry whose claimed hash is not derived from its content', async () => {
+    const authKey = await generateTestVerificationMethod();
+    const verifier = new TestCryptoImplementation({ verificationMethod: authKey });
+    const { log } = await createDID({
+      address: 'example.com',
+      signer: createTestSigner(authKey),
+      updateKeys: [authKey.publicKeyMultibase!],
+      didDocument: createTestDIDDocument(authKey),
+      verifier,
+    });
+
+    const resolved = await resolveDIDFromLog(withForeignHash(log), { verifier });
+    expect(resolved.didDocument).toBeNull();
+    expect(resolved.didResolutionMetadata.error).toBe('invalidDid');
+    expect(resolved.didResolutionMetadata.message).toMatch(/Hash chain broken at '1-/);
+  });
+
+  test('rejects a did:webvh:0.5 first entry whose claimed hash is not derived from its content', async () => {
+    const authKey = await generateTestVerificationMethod();
+    const verifier = new TestCryptoImplementation({ verificationMethod: authKey });
+    const log = await buildV05Genesis({
+      address: 'example.com',
+      signer: createTestSigner(authKey),
+      updateKeys: [authKey.publicKeyMultibase!],
+      didDocument: createTestDIDDocument(authKey),
+      verifier,
+    });
+    expect((await resolveDIDFromLog(log, { verifier })).didResolutionMetadata.error).toBeUndefined();
+
+    const resolved = await resolveDIDFromLog(withForeignHash(log), { verifier });
+    expect(resolved.didResolutionMetadata.error).toBe('invalidDid');
+    expect(resolved.didResolutionMetadata.message).toMatch(/Hash chain broken at '1-/);
   });
 });

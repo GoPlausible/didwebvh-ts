@@ -152,8 +152,30 @@ export function resolveWitnessParameter(parameters: DIDLogEntry['parameters']): 
   return undefined;
 }
 
+/**
+ * Reads a witness threshold as a whole number: an integer, or a string of
+ * decimal digits (the form resolution metadata carries it in). Anything else
+ * (`"1junk"`, `1.9`, `" 2"`) throws instead of being truncated.
+ */
 export function normalizeWitnessThreshold(threshold: string | number | undefined | null): number {
-  return parseInt((threshold ?? 0).toString(), 10);
+  const value = threshold ?? 0;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))) {
+    return Number(value);
+  }
+  throw new Error(`Witness threshold must be a non-negative integer, got ${JSON.stringify(value)}`);
+}
+
+/**
+ * True when a `witness` parameter is anything other than `{}`, the form that
+ * disables witnessing; every such parameter must be well-formed.
+ */
+export function isWitnessParameterDeclared(
+  witness?: WitnessParameterResolution | null
+): witness is WitnessParameterResolution {
+  return witness !== undefined && witness !== null && Object.keys(witness).length > 0;
 }
 
 export function hasActiveWitnessRequirement(
@@ -172,9 +194,12 @@ export function validateWitnessParameter(witness: WitnessParameterResolution): v
     throw new Error('Witness list cannot be empty');
   }
 
-  const normalizedThreshold = normalizeWitnessThreshold(witness.threshold);
-
-  if (!witness.threshold || normalizedThreshold < 1 || normalizedThreshold > witness.witnesses.length) {
+  // A threshold is a JSON number with no fractional part (did:webvh "The witness Parameter").
+  const { threshold } = witness;
+  if (typeof threshold !== 'number' || !Number.isInteger(threshold)) {
+    throw new Error(`Witness threshold must be an integer, got ${JSON.stringify(threshold)}`);
+  }
+  if (threshold < 1 || threshold > witness.witnesses.length) {
     throw new Error('Witness threshold must be between 1 and the number of witnesses');
   }
 

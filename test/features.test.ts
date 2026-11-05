@@ -119,6 +119,18 @@ test('Resolve DID at time (last)', async () => {
   expect(meta.versionId!.split('-')[0]).toBe('4');
 });
 
+test('Resolve DID at the exact versionTime of each entry', async () => {
+  // An entry is active from its own versionTime onward (DID Core versionTime).
+  for (const entry of log) {
+    const { didDocumentMetadata: meta, didResolutionMetadata } = await resolveDIDFromLog(log, {
+      versionTime: new Date(entry.versionTime),
+      verifier: testImplementation,
+    });
+    expect(didResolutionMetadata.error).toBeUndefined();
+    expect(meta.versionId).toBe(entry.versionId);
+  }
+});
+
 test('Resolve DID at version', async () => {
   const { didDocumentMetadata: meta } = await resolveDIDFromLog(log, {
     versionId: log[0].versionId,

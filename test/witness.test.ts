@@ -15,8 +15,10 @@ import { parseDidKeyDid, parseDidKeyVerificationMethod } from '../src/utils/veri
 import {
   countWitnessApprovals,
   createWitnessProof,
+  normalizeWitnessThreshold,
   signWitnessProofEntries,
   signWitnessProofEntry,
+  validateWitnessParameter,
 } from '../src/witness.js';
 import {
   buildV05Genesis,
@@ -2116,5 +2118,96 @@ describe('Witness Implementation Tests', async () => {
     expect(result.meta.witness?.threshold).toBe(1);
     expect(result.meta.witness?.witnesses?.[0].id).toBe(witnessId1);
     expect(result.meta.witness?.witnesses?.[1].id).toBe(witnessId2);
+  });
+});
+
+describe('witness parameter validation', () => {
+  // did:webvh "The witness Parameter": threshold is a JSON number with no fractional
+  // part, 1 ≤ threshold ≤ distinct witnesses; a malformed witness parameter MUST be
+  // rejected, never coerced to "no witnesses".
+  const witnessDid = async () => `did:key:${(await generateTestVerificationMethod()).publicKeyMultibase}`;
+
+  test('normalizeWitnessThreshold refuses values it would otherwise truncate', () => {
+    expect(normalizeWitnessThreshold(2)).toBe(2);
+    expect(normalizeWitnessThreshold('2')).toBe(2);
+    expect(normalizeWitnessThreshold(undefined)).toBe(0);
+    for (const bad of ['1junk', 1.9, '2.5', ' 2', '0x1', '', -1]) {
+      expect(() => normalizeWitnessThreshold(bad), String(bad)).toThrow(/non-negative integer/);
+    }
+  });
+
+  test('validateWitnessParameter requires an integer JSON number threshold', async () => {
+    const witnesses = [{ id: await witnessDid() }, { id: await witnessDid() }];
+    expect(() => validateWitnessParameter({ threshold: 2, witnesses })).not.toThrow();
+    for (const threshold of ['1', '1junk', 1.9]) {
+      expect(() => validateWitnessParameter({ threshold, witnesses }), String(threshold)).toThrow(/must be an integer/);
+    }
+  });
+
+  test('createDID refuses a non-integer threshold instead of truncating it', async () => {
+    const authKey = await generateTestVerificationMethod();
+    const verifier = new TestCryptoImplementation({ verificationMethod: authKey });
+    const witnesses = [{ id: await witnessDid() }, { id: await witnessDid() }];
+    for (const threshold of ['1junk', 1.9]) {
+      await expect(
+        createDID({
+          address: 'example.com',
+          signer: createTestSigner(authKey),
+          updateKeys: [authKey.publicKeyMultibase!],
+          didDocument: createTestDIDDocument(authKey),
+          witness: { threshold, witnesses } as never,
+          verifier,
+        }),
+        String(threshold)
+      ).rejects.toThrow(/Witness threshold/);
+    }
+  });
+
+  test('createDID writes a witness configuration without witnesses as {}', async () => {
+    const authKey = await generateTestVerificationMethod();
+    const verifier = new TestCryptoImplementation({ verificationMethod: authKey });
+    const created = await createDID({
+      address: 'example.com',
+      signer: createTestSigner(authKey),
+      updateKeys: [authKey.publicKeyMultibase!],
+      didDocument: createTestDIDDocument(authKey),
+      witness: { threshold: 2 },
+      verifier,
+    });
+    expect(created.log[0].parameters.witness).toEqual({});
+    expect((await resolveDIDFromLog(created.log, { verifier })).didResolutionMetadata.error).toBeUndefined();
+  });
+
+  test('resolution rejects a first entry whose witness parameter is malformed', async () => {
+    const a = await witnessDid();
+    const b = await witnessDid();
+    const malformed: Array<[string, unknown]> = [
+      ['threshold without witnesses', { threshold: 2 }],
+      ['witnesses without threshold', { witnesses: [{ id: a }, { id: b }] }],
+      ['zero threshold', { threshold: 0, witnesses: [{ id: a }] }],
+      ['threshold above the witness count', { threshold: 3, witnesses: [{ id: a }, { id: b }] }],
+      ['non-integer threshold', { threshold: 1.9, witnesses: [{ id: a }, { id: b }] }],
+      ['string threshold', { threshold: '1junk', witnesses: [{ id: a }, { id: b }] }],
+      ['duplicate witnesses', { threshold: 1, witnesses: [{ id: a }, { id: a }] }],
+    ];
+    for (const [name, witness] of malformed) {
+      const authKey = await generateTestVerificationMethod();
+      const verifier = new TestCryptoImplementation({ verificationMethod: authKey });
+      // buildV05Genesis signs whatever it is given, like a log written by another tool.
+      const log = await buildV05Genesis({
+        address: 'example.com',
+        signer: createTestSigner(authKey),
+        updateKeys: [authKey.publicKeyMultibase!],
+        didDocument: createTestDIDDocument(authKey),
+        witness: witness as never,
+        verifier,
+      });
+      const resolved = await resolveDIDFromLog(log, { verifier, witnessProofs: [] });
+      expect(resolved.didResolutionMetadata.error, name).toBe('invalidDid');
+      expect(resolved.didResolutionMetadata.message, name).toMatch(
+        /Witness (threshold must|list cannot|.*integer|id)|Duplicate witness/
+      );
+      expect(resolved.didResolutionMetadata.message, name).not.toMatch(/threshold not met/);
+    }
   });
 });

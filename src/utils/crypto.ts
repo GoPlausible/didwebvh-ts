@@ -26,8 +26,34 @@ export const createSCID = async (logEntryHash: string): Promise<string> => {
   return logEntryHash;
 };
 
-// Cache for deriveHash operations to avoid redundant computation
+// Cache for deriveHash operations to avoid redundant computation. Keys are
+// whole log entries chosen by DID controllers, so the cache is bounded by
+// entry count and total key size and evicts the least recently used entry.
+export const HASH_CACHE_MAX_ENTRIES = 256;
+export const HASH_CACHE_MAX_BYTES = 2 * 1024 * 1024;
 const hashCache = new Map<string, string>();
+let hashCacheBytes = 0;
+
+export function hashCacheStats(): { entries: number; bytes: number } {
+  return { entries: hashCache.size, bytes: hashCacheBytes };
+}
+
+function cacheHash(key: string, hash: string): void {
+  // An entry larger than a quarter of the budget would evict most of the cache.
+  if (key.length > HASH_CACHE_MAX_BYTES / 4 || hashCache.has(key)) {
+    return;
+  }
+  hashCache.set(key, hash);
+  hashCacheBytes += key.length;
+  while (hashCache.size > HASH_CACHE_MAX_ENTRIES || hashCacheBytes > HASH_CACHE_MAX_BYTES) {
+    const oldest = hashCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    hashCache.delete(oldest.value);
+    hashCacheBytes -= oldest.value.length;
+  }
+}
 
 // Input must be strict JSON-compatible and must not contain explicit undefined values.
 export async function deriveHash(input: unknown): Promise<string> {
@@ -37,6 +63,9 @@ export async function deriveHash(input: unknown): Promise<string> {
     cacheKey = JSON.stringify(input);
     const cached = hashCache.get(cacheKey);
     if (cached) {
+      // Refresh recency so eviction is least-recently-used.
+      hashCache.delete(cacheKey);
+      hashCache.set(cacheKey, cached);
       return cached;
     }
   } catch {
@@ -49,7 +78,7 @@ export async function deriveHash(input: unknown): Promise<string> {
   const result = encodeBase58Btc(multihash);
 
   if (cacheKey !== undefined) {
-    hashCache.set(cacheKey, result);
+    cacheHash(cacheKey, result);
   }
 
   return result;

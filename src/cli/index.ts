@@ -29,6 +29,7 @@ import { createHash } from '../utils/crypto.js';
 import { MultibaseEncoding, multibaseDecode, multibaseEncode } from '../utils/multiformats.js';
 import { parseDidKeyDid } from '../utils/verification-methods.js';
 import { deepClone } from '../utils.js';
+import { normalizeWitnessThreshold } from '../witness.js';
 import { addVerificationMethodToDocument, type VerificationRelationship } from './did-document.js';
 import {
   type CliSigningKey,
@@ -114,6 +115,14 @@ function parseExplicitPaths(pathsOption: string | string[] | undefined): string[
     .filter(Boolean);
 
   return paths.length > 0 ? paths : undefined;
+}
+
+function parseWitnessThresholdOption(value: string): number {
+  try {
+    return normalizeWitnessThreshold(value);
+  } catch (error) {
+    throw new CliError(`Invalid --witness-threshold: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function generateVerificationMethod(): Promise<CliSigningKey> {
@@ -221,7 +230,7 @@ export async function handleCreate(args: string[]) {
   const witnesses = options.witness as string[] | undefined;
   const watchers = options.watcher as string[] | undefined;
   const witnessThreshold = options['witness-threshold']
-    ? parseInt(options['witness-threshold'] as string, 10)
+    ? parseWitnessThresholdOption(options['witness-threshold'] as string)
     : (witnesses?.length ?? 0);
   const services = options.service ? parseServices(options.service as string[]) : undefined;
   const alsoKnownAs = options['also-known-as'] as string[] | undefined;
@@ -405,7 +414,7 @@ export async function handleUpdate(args: string[]) {
   const witnessProofs = readWitnessProofsFile(options['witness-file'] as string | undefined);
   const witnesses = options.witness as string[] | undefined;
   const witnessThreshold = options['witness-threshold']
-    ? parseInt(options['witness-threshold'] as string, 10)
+    ? parseWitnessThresholdOption(options['witness-threshold'] as string)
     : undefined;
   const services = options.service ? parseServices(options.service as string[]) : undefined;
   const addVm = options['add-vm'] as VerificationRelationship[] | undefined;
